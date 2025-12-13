@@ -1,0 +1,36 @@
+type: grid
+columns: 2
+square: false
+cards:
+  - type: entities
+    title: Front Left
+    state_color: true
+    entities:
+      - entity: sensor.bmw_vehicle_bmw_front_left_tire_pressuretarget_target
+        name: Target
+      - entity: sensor.bmw_vehicle_bmw_front_left_tire_pressure
+        name: Current
+  - type: entities
+    title: Front Right
+    state_color: true
+    entities:
+      - entity: sensor.bmw_vehicle_bmw_front_right_tire_pressuretarget_target
+        name: Target
+      - entity: sensor.bmw_vehicle_bmw_front_right_tire_pressure
+        name: Current
+  - type: entities
+    title: Rear Left
+    state_color: true
+    entities:
+      - entity: sensor.bmw_vehicle_bmw_rear_left_tire_pressuretarget_target
+        name: Target
+      - entity: sensor.bmw_vehicle_bmw_rear_left_tire_pressure
+        name: Current
+  - type: entities
+    title: Rear Right
+    state_color: true
+    entities:
+      - entity: sensor.bmw_vehicle_bmw_rear_right_tire_pressuretarget_target
+        name: Target
+      - entity: sensor.bmw_vehicle_bmw_rear_right_tire_pressuretarget_target
+        name: Current
