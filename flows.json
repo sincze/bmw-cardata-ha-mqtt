@@ -1,1 +1,158 @@
-[{"id":"da9139d2ffd0e455","type":"debug","z":"54ba14f7a688b268","name":"debug 19","active":true,"tosidebar":true,"console":false,"tostatus":false,"complete":"false","statusVal":"","statusType":"auto","x":3700,"y":300,"wires":[]},{"id":"20f6a4bc887c7e47","type":"mqtt out","z":"54ba14f7a688b268","name":"Homeassistant","topic":"","qos":"1","retain":"","respTopic":"","contentType":"","userProps":"","correl":"","expiry":"","broker":"51e17707f975ed60","x":3720,"y":260,"wires":[]},{"id":"4444c0acbaebb17a","type":"function","z":"54ba14f7a688b268","name":"HA Autodiscovery","func":"// ---------- VEHICLE CONFIG ----------\nconst vin = \"YOUR_VIN\";\nconst model = \"YOUR_MODEL\";\nconst vehicleName = \"BMW Vehicle\";\nconst manufacturer = \"BMW\";\n\n// ---------- INPUT ----------\nconst rawName = msg.payload.name;\nconst value = msg.payload.value;\nconst unit = msg.payload.unit || null;\n\n// ---------- VALUE TYPE DETECTION ----------\nconst isBoolean = typeof value === \"boolean\";\nconst isNumber  = typeof value === \"number\";\nconst isString  = typeof value === \"string\";\n\n// ---------- DOMAIN DETECTION ----------\nlet domain = \"sensor\";\n\nif (isBoolean) {\n    domain = \"binary_sensor\";\n}\n\nif (rawName.includes(\"currentLocation\")) {\n    domain = \"device_tracker\";\n}\n\n// ---------- CLEAN ENTITY ID ----------\nconst shortName = rawName\n    .replace(\"vehicle.\", \"\")\n    .replaceAll(\".\", \"_\")\n    .toLowerCase();\n\nconst entity_id = `bmw_${shortName}`;\n\n// ---------- MQTT DISCOVERY TOPICS ----------\nconst stateTopic  = `homeassistant/${domain}/${entity_id}/state`;\nconst configTopic = `homeassistant/${domain}/${entity_id}/config`;\n\n// ---------- FRIENDLY SUFFIX (TARGET) ----------\nlet friendlySuffix = \"\";\nif (rawName.toLowerCase().includes(\"pressuretarget\")) {\n    friendlySuffix = \" Target\";\n}\n\n// ---------- WHEEL POSITION ----------\nlet positionName = \"\";\nif (rawName.includes(\"row1.wheel.left\"))  positionName = \"Front Left \";\nif (rawName.includes(\"row1.wheel.right\")) positionName = \"Front Right \";\nif (rawName.includes(\"row2.wheel.left\"))  positionName = \"Rear Left \";\nif (rawName.includes(\"row2.wheel.right\")) positionName = \"Rear Right \";\n\n// ---------- STATE CLASS ----------\nlet stateClass = null;\n\nif (isNumber) {\n    stateClass = \"measurement\";\n}\n\nif (rawName.includes(\"travelledDistance\")) {\n    stateClass = \"total_increasing\";\n}\n\n// Pressure targets must NOT be measurements\nif (rawName.toLowerCase().includes(\"pressuretarget\")) {\n    stateClass = null;\n}\n\n// ---------- DEVICE CLASS ----------\nlet deviceClass = null;\n\n// --- numeric electrical sensors ---\nif (unit === \"A\"   && isNumber) deviceClass = \"current\";\nif (unit === \"kW\"  && isNumber) deviceClass = \"power\";\nif (unit === \"kWh\" && isNumber) deviceClass = \"energy\";\n\n// --- battery ONLY when percentage ---\nif (rawName.toLowerCase().includes(\"hvsoc\")) {\n    deviceClass = \"battery\";\n}\n\n// --- other numeric ---\nif (rawName.includes(\"tire.pressure\") && isNumber) deviceClass = \"pressure\";\nif (rawName.includes(\"avgSpeed\")      && isNumber) deviceClass = \"speed\";\nif (rawName.includes(\"travelledDistance\") && isNumber) deviceClass = \"distance\";\n\n// --- binary sensors ---\nif (domain === \"binary_sensor\") {\n    if (rawName.includes(\"isOpen\"))     deviceClass = \"door\";\n    if (rawName.includes(\"charging\"))   deviceClass = \"plug\";\n    if (rawName.includes(\".window.\"))   deviceClass = \"window\";\n}\n\n// ---------- UNIT NORMALIZATION ----------\nlet normalizedUnit = unit;\n\nif (unit) {\n    const u = unit.toLowerCase();\n    if (u === \"kpa\")     normalizedUnit = \"kPa\";\n    if (u === \"percent\")normalizedUnit = \"%\";\n    if (u === \"km/h\")   normalizedUnit = \"km/h\";\n}\n\n// --- enforce correct battery unit ---\nif (rawName.toLowerCase().includes(\"hvsoc\")) {\n    normalizedUnit = \"%\";\n    stateClass = \"measurement\";\n}\n\n// --- REMOVE unit and classes for string sensors ---\nif (isString) {\n    normalizedUnit = null;\n    stateClass     = null;\n    deviceClass    = null;\n}\n\n// ---------- FRIENDLY BASE NAME ----------\nlet baseName = rawName.split(\".\").slice(-2).join(\" \");\nlet friendlyName = `BMW ${positionName}${baseName}${friendlySuffix}`;\n\n// ---------- DISCOVERY PAYLOAD ----------\nconst configPayload = {\n    name: friendlyName,\n    unique_id: entity_id,\n    state_topic: stateTopic,\n\n    device_class: deviceClass || undefined,\n    state_class: stateClass || undefined,\n    unit_of_measurement: normalizedUnit || undefined,\n\n    ...(domain === \"binary_sensor\"\n        ? { payload_on: \"ON\", payload_off: \"OFF\" }\n        : {}),\n\n    device: {\n        identifiers: [vin],\n        name: vehicleName,\n        manufacturer: manufacturer,\n        model: model\n    }\n};\n\n// ---------- STATE NORMALIZATION ----------\nlet statePayload = value;\n\nif (domain === \"binary_sensor\") {\n    statePayload = value === true ? \"ON\" : \"OFF\";\n}\n\n// ---------- OUTPUT TO MQTT ----------\nreturn [\n    {\n        topic: configTopic,\n        payload: configPayload,\n        retain: true\n    },\n    {\n        topic: stateTopic,\n        payload: statePayload,\n        retain: true\n    }\n];\n","outputs":2,"timeout":0,"noerr":0,"initialize":"","finalize":"","libs":[],"x":3510,"y":260,"wires":[["20f6a4bc887c7e47"],["da9139d2ffd0e455","20f6a4bc887c7e47"]]},{"id":"5ddd78286c53134e","type":"function","z":"54ba14f7a688b268","name":"Prepare Data","func":"// Make sure payload and data exist\nif (!msg.payload || !msg.payload.data) {\n    // Optionally, log or pass through other messages\n    node.warn(\"No data field in payload, skipping: \" + JSON.stringify(msg.payload));\n    return null;  // stop processing this message\n}\n\n// Safe to use data now\nlet data = msg.payload.data;\nlet keys = Object.keys(data);\n\nif (keys.length > 0) {\n    let key = keys[0]; // e.g., \"vehicle.drivetrain.batteryManagement.header\"\n    let measurement = data[key]; // {timestamp, value, unit}\n\n    // Defensive: check that measurement exists and has a value\n    if (measurement && measurement.value !== undefined) {\n        msg.payload = {\n            name: key,\n            value: measurement.value,\n            unit: measurement.unit,\n            timestamp: measurement.timestamp\n        };\n        return msg;\n    } else {\n        node.warn(\"Missing measurement fields in \" + key);\n        return null;\n    }\n} else {\n    node.warn(\"Empty data object\");\n    return null;\n}\n","outputs":1,"timeout":0,"noerr":0,"initialize":"","finalize":"","libs":[],"x":3330,"y":260,"wires":[["4444c0acbaebb17a"]]},{"id":"58b04f200088ba6a","type":"mqtt in","z":"54ba14f7a688b268","name":"","topic":"bmw/#","qos":"2","datatype":"auto-detect","broker":"df52700c.0c65c","nl":false,"rap":true,"rh":0,"inputs":0,"x":3190,"y":260,"wires":[["5ddd78286c53134e"]]},{"id":"51e17707f975ed60","type":"mqtt-broker","name":"MQTT (Breda) via Docker","broker":"mqtt.home.lan","port":"1883","clientid":"","autoConnect":true,"usetls":false,"protocolVersion":"4","keepalive":"60","cleansession":true,"autoUnsubscribe":true,"birthTopic":"","birthQos":"0","birthPayload":"","birthMsg":{},"closeTopic":"","closeQos":"0","closePayload":"","closeMsg":{},"willTopic":"","willQos":"0","willPayload":"","willMsg":{},"userProps":"","sessionExpiry":""},{"id":"df52700c.0c65c","type":"mqtt-broker","name":"MQTT - Breda","broker":"mqtt.home.lan","port":"1883","clientid":"","autoConnect":true,"usetls":false,"compatmode":false,"protocolVersion":"4","keepalive":"60","cleansession":true,"autoUnsubscribe":true,"birthTopic":"","birthQos":"0","birthPayload":"","birthMsg":{},"closeTopic":"","closeQos":"0","closePayload":"","closeMsg":{},"willTopic":"","willQos":"0","willPayload":"","willMsg":{},"userProps":"","sessionExpiry":""}]
+[
+  {
+    "id": "da9139d2ffd0e455",
+    "type": "debug",
+    "z": "54ba14f7a688b268",
+    "name": "debug new",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "false",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 3700,
+    "y": 300,
+    "wires": []
+  },
+  {
+    "id": "20f6a4bc887c7e47",
+    "type": "mqtt out",
+    "z": "54ba14f7a688b268",
+    "name": "Homeassistant_Discovery",
+    "topic": "",
+    "qos": "1",
+    "retain": "",
+    "respTopic": "",
+    "contentType": "",
+    "userProps": "",
+    "correl": "",
+    "expiry": "",
+    "broker": "51e17707f975ed60",
+    "x": 3720,
+    "y": 260,
+    "wires": []
+  },
+  {
+    "id": "4444c0acbaebb17a",
+    "type": "function",
+    "z": "54ba14f7a688b268",
+    "name": "HA Autodiscovery_Prepare",
+    "func": "// ---------- VEHICLE CONFIG ----------\nconst vin = \"YOUR_VIN\";\nconst model = \"YOUR_MODEL\";\nconst vehicleName = \"BMW Vehicle\";\nconst manufacturer = \"BMW\";\n\n// ---------- HOME ZONE CONFIG ----------\nconst homeLatitude = 0.0;   // YOUR_HOME_LATITUDE\nconst homeLongitude = 0.0;  // YOUR_HOME_LONGITUDE\nconst homeRadiusMeters = 100;\n\nfunction distanceMeters(lat1, lon1, lat2, lon2) {\n    const R = 6371000;\n    const toRad = deg => deg * Math.PI / 180;\n    const dLat = toRad(lat2 - lat1);\n    const dLon = toRad(lon2 - lon1);\n    const a = Math.sin(dLat / 2) ** 2 +\n        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *\n        Math.sin(dLon / 2) ** 2;\n    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));\n}\n\nfunction toSnake(raw) {\n    return raw\n        .replace(/^vehicle\\./i, \"\")\n        .replace(/([a-z0-9])([A-Z])/g, \"$1_$2\")\n        .replace(/[^a-zA-Z0-9]+/g, \"_\")\n        .replace(/^_+|_+$/g, \"\")\n        .toLowerCase();\n}\n\nfunction labelToken(token) {\n    const t = token.toLowerCase();\n    const map = {\n        drivetrain: \"Drivetrain\",\n        battery: \"Battery\",\n        batterymanagement: \"Battery Management\",\n        management: \"Management\",\n        engine: \"Engine\",\n        temperature: \"Temperature\",\n        currentlocation: \"Location\",\n        travelleddistance: \"Travelled Distance\",\n        avgspeed: \"Average Speed\",\n        hvsoc: \"High Voltage\",\n        isopen: \"Open\",\n        charging: \"Charging\",\n        tire: \"Tyre\",\n        tyres: \"Tyre\",\n        pressure: \"Pressure\",\n        row1: \"Front\",\n        row2: \"Rear\",\n        left: \"Left\",\n        right: \"Right\",\n        wheel: \"Wheel\",\n        wheels: \"Wheel\",\n        window: \"Window\",\n        doors: \"Door\",\n        door: \"Door\",\n        soc: \"State of Charge\",\n        target: \"Target\",\n        frontleft: \"Front Left\",\n        frontright: \"Front Right\",\n        rearleft: \"Rear Left\",\n        rearright: \"Rear Right\",\n        front: \"Front\",\n        rear: \"Rear\",\n        location: \"Location\"\n    };\n    return map[t] || token.replace(/^./, c => c.toUpperCase());\n}\n\nfunction buildFriendlyName(raw) {\n    const rawLower = raw.toLowerCase();\n\n    if (rawLower.includes(\"row1.wheel.left\")) return \"Front Left Tyre Pressure\";\n    if (rawLower.includes(\"row1.wheel.right\")) return \"Front Right Tyre Pressure\";\n    if (rawLower.includes(\"row2.wheel.left\")) return \"Rear Left Tyre Pressure\";\n    if (rawLower.includes(\"row2.wheel.right\")) return \"Rear Right Tyre Pressure\";\n\n    if (rawLower.includes(\"isopen\")) {\n        const lower = raw.toLowerCase();\n        let doorLocation = \"Front\";\n\n        if (lower.includes(\"frontleft\")) doorLocation = \"Front Left\";\n        else if (lower.includes(\"frontright\")) doorLocation = \"Front Right\";\n        else if (lower.includes(\"rearleft\")) doorLocation = \"Rear Left\";\n        else if (lower.includes(\"rearright\")) doorLocation = \"Rear Right\";\n\n        return `${doorLocation} Door Open`;\n    }\n\n    const cleaned = raw\n        .replace(/^vehicle\\./i, \"\")\n        .replace(/([a-z0-9])([A-Z])/g, \"$1 $2\")\n        .replace(/[._-]+/g, \" \")\n        .split(/\\s+/)\n        .filter(Boolean)\n        .map(token => token.trim())\n        .filter(token => ![\"vehicle\", \"header\", \"door\", \"doors\"].includes(token.toLowerCase()));\n\n    let friendly = cleaned.map(labelToken).join(\" \");\n\n    if (!friendly) {\n        friendly = \"Value\";\n    }\n\n    if (rawLower.includes(\"pressuretarget\")) {\n        friendly += \" Target\";\n    }\n\n    return friendly;\n}\n\n// ---------- INPUT ----------\nif (!msg || !msg.payload || !msg.payload.name) {\n    node.warn(\"Missing payload.name, skipping discovery: \" + JSON.stringify(msg && msg.payload));\n    return null;\n}\n\nconst rawName = msg.payload.name;\nconst value = msg.payload.value;\nconst unit = msg.payload.unit || null;\n\nif (value === undefined) {\n    node.warn(\"Missing payload.value for \" + rawName);\n    return null;\n}\n\n// ---------- VALUE TYPE DETECTION ----------\nconst isBoolean = typeof value === \"boolean\";\nconst isNumber  = typeof value === \"number\";\nconst isString  = typeof value === \"string\";\n\n// ---------- DEVICE TRACKER (GPS location) ----------\nif (rawName === \"vehicle.currentLocation\" && value && typeof value === \"object\") {\n    const entity_id = \"bmw_location\";\n    const configTopic = `homeassistant/device_tracker/${entity_id}/config`;\n    const attributesTopic = `homeassistant/device_tracker/${entity_id}/attributes`;\n    const stateTopic = `homeassistant/device_tracker/${entity_id}/state`;\n\n    const configPayload = {\n        name: \"Location\",\n        unique_id: entity_id,\n        has_entity_name: true,\n        state_topic: stateTopic,\n        json_attributes_topic: attributesTopic,\n        source_type: \"gps\",\n        device: {\n            identifiers: [vin],\n            name: vehicleName,\n            manufacturer: manufacturer,\n            model: model\n        }\n    };\n\n    const attributesPayload = {\n        latitude: value.latitude,\n        longitude: value.longitude\n    };\n    if (value.altitude !== undefined) attributesPayload.altitude = value.altitude;\n    if (value.heading  !== undefined) attributesPayload.course   = value.heading;\n\n    const distance = distanceMeters(value.latitude, value.longitude, homeLatitude, homeLongitude);\n    const statePayload = distance <= homeRadiusMeters ? \"home\" : \"not_home\";\n\n    return [\n        { topic: configTopic, payload: configPayload, retain: true },\n        [\n            { topic: attributesTopic, payload: attributesPayload, retain: true },\n            { topic: stateTopic, payload: statePayload, retain: true }\n        ]\n    ];\n}\n\n// ---------- DOMAIN DETECTION ----------\nlet domain = \"sensor\";\n\nif (isBoolean) {\n    domain = \"binary_sensor\";\n}\n\n// ---------- CLEAN ENTITY ID ----------\nconst entity_id = `bmw_${toSnake(rawName)}`;\n\n// ---------- MQTT DISCOVERY TOPICS ----------\nconst stateTopic  = `homeassistant/${domain}/${entity_id}/state`;\nconst configTopic = `homeassistant/${domain}/${entity_id}/config`;\n\n// ---------- STATE CLASS ----------\nlet stateClass = null;\n\nif (isNumber) {\n    stateClass = \"measurement\";\n}\n\nif (rawName.toLowerCase().includes(\"travelleddistance\")) {\n    stateClass = \"total_increasing\";\n}\n\nif (rawName.toLowerCase().includes(\"pressuretarget\")) {\n    stateClass = null;\n}\n\n// ---------- DEVICE CLASS ----------\nlet deviceClass = null;\n\nif (unit === \"A\"   && isNumber) deviceClass = \"current\";\nif (unit === \"kW\"  && isNumber) deviceClass = \"power\";\nif (unit === \"kWh\" && isNumber) deviceClass = \"energy\";\nif (rawName.toLowerCase().includes(\"hvsoc\")) {\n    deviceClass = \"battery\";\n}\nif (rawName.includes(\"tire.pressure\") && isNumber) deviceClass = \"pressure\";\nif (rawName.includes(\"avgSpeed\") && isNumber) deviceClass = \"speed\";\nif (rawName.includes(\"travelledDistance\") && isNumber) deviceClass = \"distance\";\n\nif (domain === \"binary_sensor\") {\n    if (rawName.includes(\"isOpen\"))   deviceClass = \"door\";\n    if (rawName.includes(\"charging\")) deviceClass = \"plug\";\n    if (rawName.includes(\".window.\")) deviceClass = \"window\";\n}\n\n// ---------- UNIT NORMALIZATION ----------\nlet normalizedUnit = unit;\n\nif (unit) {\n    const u = unit.toLowerCase();\n    if (u === \"kpa\")     normalizedUnit = \"kPa\";\n    if (u === \"percent\") normalizedUnit = \"%\";\n    if (u === \"km/h\")   normalizedUnit = \"km/h\";\n}\n\nif (rawName.toLowerCase().includes(\"hvsoc\")) {\n    normalizedUnit = \"%\";\n    stateClass = \"measurement\";\n}\n\nif (isString) {\n    normalizedUnit = null;\n    stateClass = null;\n    deviceClass = null;\n}\n\n// ---------- FRIENDLY NAME ----------\nconst friendlyName = buildFriendlyName(rawName);\n\n// ---------- DISCOVERY PAYLOAD ----------\nconst configPayload = {\n    name: friendlyName,\n    unique_id: entity_id,\n    has_entity_name: true,\n    state_topic: stateTopic,\n\n    device_class: deviceClass || undefined,\n    state_class: stateClass || undefined,\n    unit_of_measurement: normalizedUnit || undefined,\n\n    ...(domain === \"binary_sensor\"\n        ? { payload_on: \"ON\", payload_off: \"OFF\" }\n        : {}),\n\n    device: {\n        identifiers: [vin],\n        name: vehicleName,\n        manufacturer: manufacturer,\n        model: model\n    }\n};\n\n// ---------- STATE NORMALIZATION ----------\nlet statePayload = value;\n\nif (domain === \"binary_sensor\") {\n    statePayload = value === true ? \"ON\" : \"OFF\";\n}\n\n// ---------- OUTPUT TO MQTT ----------\nreturn [\n    {\n        topic: configTopic,\n        payload: configPayload,\n        retain: true\n    },\n    {\n        topic: stateTopic,\n        payload: statePayload,\n        retain: true\n    }\n];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 3510,
+    "y": 260,
+    "wires": [
+      [
+        "20f6a4bc887c7e47"
+      ],
+      [
+        "da9139d2ffd0e455",
+        "20f6a4bc887c7e47"
+      ]
+    ]
+  },
+  {
+    "id": "5ddd78286c53134e",
+    "type": "function",
+    "z": "54ba14f7a688b268",
+    "name": "Prepare Data for HA Discovery",
+    "func": "// Make sure payload and data exist\nif (!msg.payload || !msg.payload.data) {\n    node.warn(\"No data field in payload, skipping: \" + JSON.stringify(msg.payload));\n    return null;\n}\n\n// Process every measurement in the data object\nconst data = msg.payload.data;\nconst entries = Object.entries(data || {});\n\nif (entries.length === 0) {\n    node.warn(\"Empty data object\");\n    return null;\n}\n\n// GPS fields arrive one at a time in separate messages (never bundled together),\n// so the last known value of each is cached in node context and merged whenever\n// any one of them updates.\nconst LOCATION_FIELD_RE = /currentLocation\\.(latitude|longitude|heading|altitude)$/i;\n\nconst messages = [];\nlet locationUpdated = false;\nconst location = context.get(\"bmwLocation\") || {};\n\nfor (const [key, measurement] of entries) {\n    if (!measurement || measurement.value === undefined) {\n        node.warn(\"Missing measurement fields in \" + key);\n        continue;\n    }\n\n    const locationMatch = key.match(LOCATION_FIELD_RE);\n    if (locationMatch) {\n        location[locationMatch[1].toLowerCase()] = Number(measurement.value);\n        location.timestamp = measurement.timestamp;\n        locationUpdated = true;\n        continue;\n    }\n\n    messages.push({\n        payload: {\n            name: key,\n            value: measurement.value,\n            unit: measurement.unit,\n            timestamp: measurement.timestamp\n        }\n    });\n}\n\nif (locationUpdated) {\n    context.set(\"bmwLocation\", location);\n\n    if (location.latitude !== undefined && location.longitude !== undefined) {\n        messages.push({\n            payload: {\n                name: \"vehicle.currentLocation\",\n                value: {\n                    latitude: location.latitude,\n                    longitude: location.longitude,\n                    heading: location.heading,\n                    altitude: location.altitude\n                },\n                unit: null,\n                timestamp: location.timestamp\n            }\n        });\n    }\n}\n\nif (messages.length === 0) {\n    return null;\n}\n\nreturn messages;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 3330,
+    "y": 260,
+    "wires": [
+      [
+        "4444c0acbaebb17a"
+      ]
+    ]
+  },
+  {
+    "id": "58b04f200088ba6a",
+    "type": "mqtt in",
+    "z": "54ba14f7a688b268",
+    "name": "BMW Car Data MQTT",
+    "topic": "bmw/#",
+    "qos": "2",
+    "datatype": "auto-detect",
+    "broker": "df52700c.0c65c",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 3190,
+    "y": 260,
+    "wires": [
+      [
+        "5ddd78286c53134e"
+      ]
+    ]
+  },
+  {
+    "id": "51e17707f975ed60",
+    "type": "mqtt-broker",
+    "name": "MQTT (Breda) via Docker",
+    "broker": "mqtt.home.lan",
+    "port": "1883",
+    "clientid": "",
+    "autoConnect": true,
+    "usetls": false,
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "autoUnsubscribe": true,
+    "birthTopic": "",
+    "birthQos": "0",
+    "birthPayload": "",
+    "birthMsg": {},
+    "closeTopic": "",
+    "closeQos": "0",
+    "closePayload": "",
+    "closeMsg": {},
+    "willTopic": "",
+    "willQos": "0",
+    "willPayload": "",
+    "willMsg": {},
+    "userProps": "",
+    "sessionExpiry": ""
+  },
+  {
+    "id": "df52700c.0c65c",
+    "type": "mqtt-broker",
+    "name": "MQTT - Breda",
+    "broker": "mqtt.home.lan",
+    "port": "1883",
+    "clientid": "",
+    "autoConnect": true,
+    "usetls": false,
+    "compatmode": false,
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "autoUnsubscribe": true,
+    "birthTopic": "",
+    "birthQos": "0",
+    "birthPayload": "",
+    "birthMsg": {},
+    "closeTopic": "",
+    "closeQos": "0",
+    "closePayload": "",
+    "closeMsg": {},
+    "willTopic": "",
+    "willQos": "0",
+    "willPayload": "",
+    "willMsg": {},
+    "userProps": "",
+    "sessionExpiry": ""
+  }
+]
