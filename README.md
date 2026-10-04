@@ -13,7 +13,14 @@ const vin = "YOUR_VIN";
 const model = "YOUR_MODEL";
 const vehicleName = "BMW Vehicle";
 const manufacturer = "BMW";
+
+// ---------- HOME ZONE CONFIG ----------
+const homeLatitude = 0.0;   // YOUR_HOME_LATITUDE
+const homeLongitude = 0.0;  // YOUR_HOME_LONGITUDE
+const homeRadiusMeters = 100;
 ```
+
+`homeLatitude`/`homeLongitude` should match your Home Assistant home zone coordinates, and `homeRadiusMeters` sets how close the car needs to be to be reported as `home` on the `device_tracker.bmw_location` entity.
 
 # License
 MIT License © 2025 SINCZE
