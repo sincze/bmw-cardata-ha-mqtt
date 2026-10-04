@@ -1,0 +1,89 @@
+# bmw-cardata-ha-mqtt
+
+BMW CarData → Home Assistant via MQTT autodiscovery, for people who run
+[dj0abr/bmw-mqtt-bridge](https://github.com/dj0abr/bmw-mqtt-bridge) and want
+native HA entities **without a second BMW Client ID, OAuth flow or tokens inside Home Assistant**.
+
+```
+BMW CarData stream ──► bmw-mqtt-bridge ──► Mosquitto ──► Node-RED (this flow) ──► HA MQTT discovery
+                       (single BMW client)   bmw/raw/<VIN>/<event>              homeassistant/.../config
+                                                                                 bmw/ha/<VIN>/<descriptor>/state
+```
+
+The bridge stays the only client on BMW's one-stream-per-account limit. Node-RED
+and any other local consumer just subscribe to Mosquitto.
+
+## What you get
+
+* One HA entity per descriptor the car actually sends, with **BMW's own catalogue
+  titles** (e.g. `Door state (front driver)`, `Charging EV Energy supplied total`) for
+  all 294 known descriptors; unknown descriptors still get a readable fallback name.
+* Correct `device_class` / `state_class` / unit, so the Energy dashboard accepts the
+  lifetime grid-energy counters, pressures convert, and HA never rejects a config
+  (no `energy`+`measurement`, no `volume`+`measurement`).
+* Booleans → `binary_sensor` with `door`, `window`, `moving`, `plug`, `lock`
+  (lock is inverted the way HA expects), `running`.
+* Window / sunroof enum strings (`CLOSED`/`INTERMEDIATE`/`OPEN`) → an extra
+  `binary_sensor … open` with the `window` class, so `window.opened` triggers work.
+* `device_tracker` per car built from the separately streamed lat/lon/heading/altitude.
+  HA does zone detection itself; no hard-coded home coordinates.
+* **Multi-car**: everything is scoped by VIN. Two BMWs on one account just work.
+* Values outside BMW's declared range (the Neue Klasse `2777774 kWh/100km` placeholder)
+  are dropped instead of polluting history.
+* Availability tied to the bridge's `bmw/status` topic.
+* Every entity has `timestamp` and `descriptor` attributes (optional).
+* Everything is published **retained**, so HA restarts restore instantly.
+
+## Setup
+
+1. **Bridge**: in the bridge `.env` set `MQTT_RETAIN=1` (recommended) and leave
+   `LOCAL_PREFIX=bmw/`. Split topics are not needed.
+2. **Node-RED**: import `flows.json`. Point the `Local Mosquitto` broker config at your broker.
+3. In the **`HA Autodiscovery (catalogue)`** function node, fill in `VEHICLES`:
+   ```js
+   const VEHICLES = {
+       "WBA12345678901234": { name: "BMW i4", model: "i4 eDrive40" },
+   };
+   ```
+   Unknown VINs fall back to `BMW <last 7 of VIN>`, so this is cosmetic.
+4. Deploy. Lock/unlock the car from the MyBMW app to make it talk; entities appear
+   under one device per car in **Settings → Devices & services → MQTT**.
+
+### Options (top of the discovery node)
+
+| Constant | Default | Purpose |
+|---|---|---|
+| `STATE_PREFIX` | `bmw/ha` | Where state topics are published |
+| `BRIDGE_STATUS` | `bmw/status` | Availability topic from the bridge |
+| `PUBLISH_ATTRIBUTES` | `true` | Extra `/attributes` topic per entity (timestamp, descriptor, raw unit) |
+| `EXPIRE_AFTER_S` | `0` | Mark sensors unavailable after N seconds of silence |
+
+## Files
+
+* `flows.json` – import into Node-RED.
+* `bmw_catalogue.json` – the descriptor catalogue as data (titles + classification rules), for reuse in other tools.
+* `build/` – sources: `catalogue.py`, `prepare.js`, `discovery.js`, `build.py` (regenerates `flows.json`), `test.js` (runs both nodes against sample payloads: `python3 build.py && node test.js`).
+
+## Migrating from v1 of this flow
+
+Entity `unique_id`s changed from `bmw_<descriptor>` to `bmw_<VIN>_<descriptor>` and
+state topics moved from `homeassistant/…/state` to `bmw/ha/<VIN>/…`. Delete the old
+MQTT device in HA once (Settings → Devices → MQTT → BMW Vehicle → Delete) and clear
+the old retained discovery topics:
+
+```
+mosquitto_sub -h mqtt.home.lan -t 'homeassistant/+/bmw_+/config' -v --retained-only -W 2 \
+  | cut -d' ' -f1 | xargs -I{} mosquitto_pub -h mqtt.home.lan -t '{}' -r -n
+```
+
+## Credits
+
+* Stream transport: [dj0abr/bmw-mqtt-bridge](https://github.com/dj0abr/bmw-mqtt-bridge) (MIT).
+* Descriptor titles and classification rules derived from
+  [kvanbiesen/bmw-cardata-ha](https://github.com/kvanbiesen/bmw-cardata-ha)
+  (BSD-2-Clause, © 2025 Kris Van Biesen, Renaud Allard, Jyri Saukkonen, Michal Franek,
+  Martijn Janssen and contributors), which generated them from BMW's CarData catalogue.
+
+## License
+
+MIT © 2025 SINCZE. Catalogue data redistributed under BSD-2-Clause, see Credits.
